@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Node represents a directory in the filesystem tree.
@@ -119,18 +120,32 @@ func (n *Node) Depth(root *Node) int {
 
 // fuzzyMatch checks if the query is a subsequence of the target.
 func fuzzyMatch(target, query string) bool {
-	if query == "" {
-		return true
-	}
-	target = strings.ToLower(target)
-	query = strings.ToLower(query)
+	matched, _ := fuzzyMatchWithIndices(target, query)
+	return matched
+}
 
+// fuzzyMatchWithIndices checks if the query is a subsequence of the target,
+// returning the match status and target rune indices that matched.
+func fuzzyMatchWithIndices(target, query string) (bool, []int) {
+	if query == "" {
+		return true, nil
+	}
+	targetRunes := []rune(target)
+	queryRunes := []rune(strings.ToLower(query))
+
+	var indices []int
 	tIdx, qIdx := 0, 0
-	for tIdx < len(target) && qIdx < len(query) {
-		if target[tIdx] == query[qIdx] {
+	for tIdx < len(targetRunes) && qIdx < len(queryRunes) {
+		rT := unicode.ToLower(targetRunes[tIdx])
+		rQ := queryRunes[qIdx]
+		if rT == rQ {
+			indices = append(indices, tIdx)
 			qIdx++
 		}
 		tIdx++
 	}
-	return qIdx == len(query)
+	if qIdx == len(queryRunes) {
+		return true, indices
+	}
+	return false, nil
 }

@@ -1,8 +1,9 @@
 package main
 
 import (
-	"fmt"
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -12,6 +13,10 @@ import (
 
 // Styling constants using a vibrant Catppuccin-inspired dark theme.
 var (
+	// Custom renderer bound to stderr so that color detection is based on the TUI output stream
+	// instead of stdout (which is redirected during pipeline execution).
+	Renderer = lipgloss.NewRenderer(os.Stderr)
+
 	PrimaryColor   = lipgloss.Color("#7D56F4") // Vibrant Violet
 	AccentColor    = lipgloss.Color("#04B575") // Forest Green
 	WarningColor   = lipgloss.Color("#FF5F87") // Coral/Pink
@@ -20,36 +25,41 @@ var (
 	SubtleColor    = lipgloss.Color("#6C7086") // Slate Grey
 	SelectionColor = lipgloss.Color("#313244") // Darker Highlight Grey
 
-	TitleStyle = lipgloss.NewStyle().
+	// FZF highlighting colors
+	FzfMatchColor         = lipgloss.Color("#FAB387") // Warm Orange
+	FzfMatchSelectedColor = lipgloss.Color("#F5C2E7") // Soft Rosewater
+	GitBranchColor        = lipgloss.Color("#BD93F9") // Starship Git Branch Purple
+
+	TitleStyle = Renderer.NewStyle().
 			Background(PrimaryColor).
 			Foreground(lipgloss.Color("#FFFFFF")).
 			Bold(true).
 			Padding(0, 1)
 
-	RootStyle = lipgloss.NewStyle().
+	RootStyle = Renderer.NewStyle().
 			Foreground(AccentColor).
 			Bold(true)
 
-	FolderStyle = lipgloss.NewStyle().
+	FolderStyle = Renderer.NewStyle().
 			Foreground(FgColor)
 
-	SelectedFolderStyle = lipgloss.NewStyle().
+	SelectedFolderStyle = Renderer.NewStyle().
 				Background(SelectionColor).
 				Foreground(PrimaryColor).
 				Bold(true)
 
-	SearchPromptStyle = lipgloss.NewStyle().
+	SearchPromptStyle = Renderer.NewStyle().
 				Foreground(AccentColor).
 				Bold(true)
 
-	SearchInputStyle = lipgloss.NewStyle().
+	SearchInputStyle = Renderer.NewStyle().
 				Foreground(FgColor)
 
-	HelpStyle = lipgloss.NewStyle().
+	HelpStyle = Renderer.NewStyle().
 			Foreground(SubtleColor).
 			Italic(true)
 
-	ModalStyle = lipgloss.NewStyle().
+	ModalStyle = Renderer.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(PrimaryColor).
 			Padding(1, 2).
@@ -79,6 +89,7 @@ type Model struct {
 
 	FinalPath string
 	Quitting  bool
+	GitBranch string // Cached Git branch name of active root
 }
 
 func NewModel(rootPath string, zoxidePaths []string) *Model {
@@ -92,6 +103,7 @@ func NewModel(rootPath string, zoxidePaths []string) *Model {
 		ZoxidePaths:  zoxidePaths,
 		ZoxideActive: false,
 	}
+	m.updateGitBranch()
 	m.updateVisibleNodes()
 	return m
 }
@@ -126,6 +138,7 @@ func (m *Model) goUpDirectory() {
 	m.Root = newRoot
 	m.Selected = newRoot
 
+	m.updateGitBranch()
 	m.updateVisibleNodes()
 
 	// Place cursor on the folder we just exited
@@ -137,6 +150,20 @@ func (m *Model) goUpDirectory() {
 		}
 	}
 	m.keepCursorInView(m.Height - 5)
+}
+
+func getGitBranch(dir string) string {
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(stdout.String())
+}
+
+func (m *Model) updateGitBranch() {
+	m.GitBranch = getGitBranch(m.Root.Path)
 }
 
 func (m *Model) nextSibling() {
@@ -166,7 +193,19 @@ func (m *Model) prevSibling() {
 }
 
 func (m *Model) updateVisibleNodes() {
-	m.VisibleNodes = m.Root.GetVisibleNodes(m.SearchNode, m.SearchQuery)
+	allElaborated := m.Root.GetVisibleNodes(nil, "")
+
+	if m.SearchActive && m.SearchQuery != "" {
+		var filtered []*Node
+		for _, node := range allElaborated {
+			if matched, _ := fuzzyMatchWithIndices(node.Name, m.SearchQuery); matched {
+				filtered = append(filtered, node)
+			}
+		}
+		m.VisibleNodes = filtered
+	} else {
+		m.VisibleNodes = allElaborated
+	}
 
 	found := false
 	for i, n := range m.VisibleNodes {
@@ -257,7 +296,7 @@ func (m *Model) updateTree(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.Selected = m.VisibleNodes[m.Cursor]
 		}
 
-	case "h":
+	case "h", "left":
 		if m.Selected.Expanded {
 			m.Selected.Expanded = false
 			m.updateVisibleNodes()
@@ -268,25 +307,29 @@ func (m *Model) updateTree(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.goUpDirectory()
 		}
 
-	case "l":
+	case "l", "right":
 		if !m.Selected.Expanded {
 			m.Selected.Expanded = true
 			_ = m.Selected.LoadChildren()
 			m.updateVisibleNodes()
 		} else if len(m.Selected.Children) > 0 {
 			var firstChild *Node
-			if m.SearchActive && m.Selected == m.SearchNode && m.SearchQuery != "" {
-				for _, child := range m.Selected.Children {
-					if fuzzyMatch(child.Name, m.SearchQuery) {
+			for _, child := range m.Selected.Children {
+				for _, vis := range m.VisibleNodes {
+					if vis == child {
 						firstChild = child
 						break
 					}
 				}
-			} else {
-				firstChild = m.Selected.Children[0]
+				if firstChild != nil {
+					break
+				}
 			}
 			if firstChild != nil {
 				m.Selected = firstChild
+				m.updateVisibleNodes()
+			} else {
+				m.Selected = m.Selected.Children[0]
 				m.updateVisibleNodes()
 			}
 		}
@@ -300,13 +343,6 @@ func (m *Model) updateTree(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.SearchActive = true
 		m.SearchQuery = ""
-		if m.Selected.Expanded && len(m.Selected.Children) > 0 {
-			m.SearchNode = m.Selected
-		} else if m.Selected.Parent != nil {
-			m.SearchNode = m.Selected.Parent
-		} else {
-			m.SearchNode = m.Root
-		}
 		m.updateVisibleNodes()
 
 	case "z":
@@ -361,6 +397,7 @@ func (m *Model) updateZoxide(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.Root.Expanded = true
 			m.Selected = m.Root
 			m.ZoxideActive = false
+			m.updateGitBranch()
 			m.updateVisibleNodes()
 		}
 		return m, nil
@@ -391,20 +428,42 @@ func (m *Model) updateZoxide(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) renderHeader() string {
-	title := TitleStyle.Render(" SNEAK PATH PICKER ")
-	rootPath := RootStyle.Render(" " + m.Root.Path)
+	var s strings.Builder
 
-	searchStatus := ""
-	if m.SearchActive {
-		searchStatus = lipgloss.NewStyle().Foreground(WarningColor).Render(" [SEARCH ACTIVE]")
+	displayPath := m.Root.Path
+	homeDir := os.Getenv("HOME")
+	if homeDir != "" && strings.HasPrefix(displayPath, homeDir) {
+		displayPath = "~" + strings.TrimPrefix(displayPath, homeDir)
 	}
 
-	return title + " " + rootPath + searchStatus + "\n" + strings.Repeat("─", m.Width)
+	pathStyle := Renderer.NewStyle().Foreground(PrimaryColor).Bold(true)
+	icon := ""
+	if m.Root.Path == homeDir {
+		icon = ""
+	} else if m.Root.Path == "/" {
+		icon = ""
+	}
+
+	s.WriteString(" " + pathStyle.Render(icon+" "+displayPath))
+
+	if m.GitBranch != "" {
+		gitStyle := Renderer.NewStyle().Foreground(GitBranchColor)
+		s.WriteString(gitStyle.Render(" on  "+m.GitBranch))
+	}
+
+	if m.SearchActive {
+		searchStyle := Renderer.NewStyle().Foreground(WarningColor).Bold(true)
+		s.WriteString(searchStyle.Render(" [search: "+m.SearchQuery+"]"))
+	}
+
+	headerLine := s.String()
+	divider := Renderer.NewStyle().Foreground(SubtleColor).Render(strings.Repeat("─", m.Width))
+	return headerLine + "\n" + divider
 }
 
 func (m *Model) renderTree(maxLines int) string {
 	if len(m.VisibleNodes) == 0 {
-		return "\n  " + lipgloss.NewStyle().Foreground(SubtleColor).Render("(No matching directories found)") + strings.Repeat("\n", maxLines-1)
+		return "\n  " + Renderer.NewStyle().Foreground(SubtleColor).Render("(No matching directories found)") + strings.Repeat("\n", maxLines-1)
 	}
 
 	var lines []string
@@ -419,29 +478,53 @@ func (m *Model) renderTree(maxLines int) string {
 		depth := node.Depth(m.Root)
 		indent := strings.Repeat("  ", depth)
 
-		prefix := "▶ "
+		prefix := "  "
 		if node.Expanded {
-			prefix = "▼ "
+			prefix = "  "
 		}
 
 		nodeName := node.Name
 		if node == m.Root {
 			nodeName = " ~ " + filepath.Base(node.Path)
-			prefix = ""
+			prefix = " "
 		}
 
-		lineText := fmt.Sprintf("%s%s%s", indent, prefix, nodeName)
+		var matchIndices []int
+		if m.SearchActive && m.SearchQuery != "" {
+			_, matchIndices = fuzzyMatchWithIndices(nodeName, m.SearchQuery)
+		}
 
+		var baseStyle lipgloss.Style
 		if i == m.Cursor {
-			lineText = SelectedFolderStyle.Render("❯ " + lineText)
+			baseStyle = SelectedFolderStyle
 		} else {
-			lineText = "  " + FolderStyle.Render(lineText)
+			baseStyle = FolderStyle
+		}
+
+		var highlightedName string
+		if len(matchIndices) > 0 {
+			var highlightStyle lipgloss.Style
+			if i == m.Cursor {
+				highlightStyle = Renderer.NewStyle().Foreground(FzfMatchSelectedColor).Bold(true).Underline(true)
+			} else {
+				highlightStyle = Renderer.NewStyle().Foreground(FzfMatchColor).Bold(true)
+			}
+			highlightedName = highlightText(nodeName, matchIndices, baseStyle, highlightStyle)
+		} else {
+			highlightedName = baseStyle.Render(nodeName)
+		}
+
+		var lineText string
+		indentStyle := Renderer.NewStyle().Foreground(SubtleColor)
+		if i == m.Cursor {
+			lineText = indentStyle.Render("❯ "+indent) + baseStyle.Render(prefix) + highlightedName
+		} else {
+			lineText = indentStyle.Render("  "+indent) + baseStyle.Render(prefix) + highlightedName
 		}
 
 		lines = append(lines, lineText)
 	}
 
-	// Pad remaining space
 	for len(lines) < maxLines {
 		lines = append(lines, "")
 	}
@@ -451,15 +534,16 @@ func (m *Model) renderTree(maxLines int) string {
 
 func (m *Model) renderFooter() string {
 	var s strings.Builder
-	s.WriteString(strings.Repeat("─", m.Width) + "\n")
+	divider := Renderer.NewStyle().Foreground(SubtleColor).Render(strings.Repeat("─", m.Width))
+	s.WriteString(divider + "\n")
 
 	if m.SearchActive {
-		prompt := SearchPromptStyle.Render(" SHALLOW SEARCH ❯ ")
+		prompt := SearchPromptStyle.Render("  search ❯ ")
 		input := SearchInputStyle.Render(m.SearchQuery)
 		s.WriteString(prompt + input + "█\n")
-		s.WriteString(HelpStyle.Render(" esc: cancel search • enter: lock query • j/k: navigate"))
+		s.WriteString(HelpStyle.Render("  esc: cancel search • enter: lock query • j/k: navigate"))
 	} else {
-		s.WriteString(HelpStyle.Render(" j/k: navigate • h/l: up/down tree • H/L: leap siblings • /: filter • z: zoxide • enter: pick • q: quit"))
+		s.WriteString(HelpStyle.Render("  j/k: navigate • h/l: up/down tree • H/L: sibling leap • /: search • z: zoxide • enter: pick • q: quit"))
 	}
 
 	return s.String()
@@ -468,9 +552,9 @@ func (m *Model) renderFooter() string {
 func (m *Model) renderZoxideModal() string {
 	var s strings.Builder
 
-	s.WriteString(lipgloss.NewStyle().Foreground(PrimaryColor).Bold(true).Render("ZOXIDE JUMP PANEL") + "\n\n")
+	s.WriteString(Renderer.NewStyle().Foreground(PrimaryColor).Bold(true).Render("ZOXIDE JUMP PANEL") + "\n\n")
 
-	prompt := lipgloss.NewStyle().Foreground(AccentColor).Bold(true).Render("Filter paths: ")
+	prompt := Renderer.NewStyle().Foreground(AccentColor).Bold(true).Render("Filter paths: ")
 	s.WriteString(prompt + m.ZoxideQuery + "█\n\n")
 
 	modalWidth := m.Width - 10
@@ -505,7 +589,7 @@ func (m *Model) renderZoxideModal() string {
 	}
 
 	if len(m.ZoxideFiltered) == 0 {
-		s.WriteString(lipgloss.NewStyle().Foreground(SubtleColor).Render("  No matching zoxide paths found\n"))
+		s.WriteString(Renderer.NewStyle().Foreground(SubtleColor).Render("  No matching zoxide paths found\n"))
 		for i := 1; i < maxListLines; i++ {
 			s.WriteString("\n")
 		}
@@ -525,7 +609,7 @@ func (m *Model) renderZoxideModal() string {
 			if i == m.ZoxideCursor {
 				s.WriteString(SelectedFolderStyle.Render(" ❯ "+displayPath) + "\n")
 			} else {
-				s.WriteString(lipgloss.NewStyle().Foreground(FgColor).Render("   "+displayPath) + "\n")
+				s.WriteString(Renderer.NewStyle().Foreground(FgColor).Render("   "+displayPath) + "\n")
 			}
 		}
 
@@ -567,4 +651,26 @@ func (m Model) View() string {
 	s.WriteString(m.renderFooter())
 
 	return s.String()
+}
+
+func highlightText(text string, indices []int, baseStyle, highlightStyle lipgloss.Style) string {
+	if len(indices) == 0 {
+		return baseStyle.Render(text)
+	}
+	runes := []rune(text)
+	var sb strings.Builder
+	idxMap := make(map[int]bool)
+	for _, idx := range indices {
+		idxMap[idx] = true
+	}
+
+	for i, r := range runes {
+		charStr := string(r)
+		if idxMap[i] {
+			sb.WriteString(highlightStyle.Render(charStr))
+		} else {
+			sb.WriteString(baseStyle.Render(charStr))
+		}
+	}
+	return sb.String()
 }
