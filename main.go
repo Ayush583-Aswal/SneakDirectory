@@ -32,6 +32,16 @@ func getZoxidePaths() []string {
 	return paths
 }
 
+// addZoxidePath runs `zoxide add <path>` to record the directory in the user's database.
+func addZoxidePath(path string) {
+	fi, err := os.Stat(path)
+	if err != nil || !fi.IsDir() {
+		return
+	}
+	cmd := exec.Command("zoxide", "add", path)
+	_ = cmd.Run()
+}
+
 func main() {
 	var startDir string
 	if len(os.Args) > 1 {
@@ -67,6 +77,9 @@ func main() {
 
 	// Check if selection was made
 	if fm, ok := finalModel.(*Model); ok && fm.FinalPath != "" {
+		// Add selected directory to zoxide
+		addZoxidePath(fm.FinalPath)
+
 		// Print the substituted command to stderr so it shows up above the prompt
 		printProcessedCommand(fm.FinalPath)
 		// Print only the final absolute path to stdout
