@@ -76,6 +76,7 @@ type Model struct {
 	SearchActive bool
 	SearchNode   *Node
 	SearchQuery  string
+	gPending     bool
 
 	ZoxideActive   bool
 	ZoxidePaths    []string
@@ -121,6 +122,20 @@ func (m *Model) keepCursorInView(maxLines int) {
 	}
 	if m.ScrollOffset < 0 {
 		m.ScrollOffset = 0
+	}
+}
+
+func (m *Model) centerCursor(maxLines int) {
+	if len(m.VisibleNodes) <= maxLines {
+		m.ScrollOffset = 0
+		return
+	}
+	m.ScrollOffset = m.Cursor - maxLines/2
+	if m.ScrollOffset < 0 {
+		m.ScrollOffset = 0
+	}
+	if m.ScrollOffset > len(m.VisibleNodes)-maxLines {
+		m.ScrollOffset = len(m.VisibleNodes) - maxLines
 	}
 }
 
@@ -196,6 +211,7 @@ func (m *Model) updateVisibleNodes() {
 	allElaborated := m.Root.GetVisibleNodes(nil, "")
 
 	if m.SearchActive && m.SearchQuery != "" {
+		m.ScrollOffset = 0
 		var filtered []*Node
 		for _, node := range allElaborated {
 			relPath, err := filepath.Rel(m.Root.Path, node.Path)
@@ -281,6 +297,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateTree(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.gPending {
+		m.gPending = false
+		if msg.String() == "g" {
+			if len(m.VisibleNodes) > 0 {
+				m.Cursor = 0
+				m.Selected = m.VisibleNodes[m.Cursor]
+			}
+			return m, nil
+		}
+	}
+
 	switch msg.String() {
 	case "q", "esc":
 		m.Quitting = true
@@ -300,6 +327,16 @@ func (m *Model) updateTree(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k", "up":
 		if m.Cursor > 0 {
 			m.Cursor--
+			m.Selected = m.VisibleNodes[m.Cursor]
+		}
+
+	case "g":
+		m.gPending = true
+		return m, nil
+
+	case "G":
+		if len(m.VisibleNodes) > 0 {
+			m.Cursor = len(m.VisibleNodes) - 1
 			m.Selected = m.VisibleNodes[m.Cursor]
 		}
 
@@ -367,12 +404,40 @@ func (m *Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEnter:
 		m.SearchActive = false
+		if m.Selected != nil {
+			m.Selected.Expanded = true
+			_ = m.Selected.LoadChildren()
+		}
+		m.updateVisibleNodes()
+
+		headerHeight := 3
+		footerHeight := 2
+		maxTreeLines := m.Height - headerHeight - footerHeight
+		if maxTreeLines <= 0 {
+			maxTreeLines = 1
+		}
+		m.centerCursor(maxTreeLines)
+
 		return m, nil
 
 	case tea.KeyEsc:
 		m.SearchActive = false
 		m.SearchQuery = ""
 		m.updateVisibleNodes()
+		return m, nil
+
+	case tea.KeyUp, tea.KeyCtrlK:
+		if m.Cursor > 0 {
+			m.Cursor--
+			m.Selected = m.VisibleNodes[m.Cursor]
+		}
+		return m, nil
+
+	case tea.KeyDown, tea.KeyCtrlJ:
+		if m.Cursor < len(m.VisibleNodes)-1 {
+			m.Cursor++
+			m.Selected = m.VisibleNodes[m.Cursor]
+		}
 		return m, nil
 
 	case tea.KeyBackspace:
@@ -575,7 +640,7 @@ func (m *Model) renderFooter() string {
 		s.WriteString(prompt + input + "█\n")
 		s.WriteString(HelpStyle.Render("  esc: cancel search • enter: lock query • j/k: navigate"))
 	} else {
-		s.WriteString(HelpStyle.Render("  j/k: navigate • h/l: up/down tree • H/L: sibling leap • /: search • z: zoxide • enter: pick • q: quit"))
+		s.WriteString(HelpStyle.Render("  j/k: navigate • gg/G: top/bottom • h/l: up/down tree • H/L: sibling leap • /: search • z: zoxide • enter: pick • q: quit"))
 	}
 
 	return s.String()
@@ -656,7 +721,7 @@ func (m *Model) renderZoxideModal() string {
 	return lipgloss.Place(m.Width, m.Height, lipgloss.Center, lipgloss.Center, modalStyled)
 }
 
-func (m Model) View() string {
+func (m *Model) View() string {
 	if m.Quitting {
 		return ""
 	}
