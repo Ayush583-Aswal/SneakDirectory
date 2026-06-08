@@ -118,6 +118,52 @@ func (n *Node) Depth(root *Node) int {
 	return depth
 }
 
+// IsLastChild checks if the node is the last child of its parent.
+func (n *Node) IsLastChild() bool {
+	if n.Parent == nil {
+		return true
+	}
+	siblings := n.Parent.Children
+	if len(siblings) == 0 {
+		return true
+	}
+	return siblings[len(siblings)-1] == n
+}
+
+// TreeConnector generates the tree line prefix (e.g. "│   └── ") for the node.
+func (n *Node) TreeConnector(root *Node) string {
+	if n == root {
+		return ""
+	}
+
+	// Walk up to gather ancestors (excluding the node itself and the root)
+	var ancestors []*Node
+	curr := n.Parent
+	for curr != nil && curr != root {
+		ancestors = append(ancestors, curr)
+		curr = curr.Parent
+	}
+
+	var sb strings.Builder
+	// Process ancestors from top-down
+	for i := len(ancestors) - 1; i >= 0; i-- {
+		anc := ancestors[i]
+		if anc.IsLastChild() {
+			sb.WriteString("    ")
+		} else {
+			sb.WriteString("│   ")
+		}
+	}
+
+	if n.IsLastChild() {
+		sb.WriteString("└── ")
+	} else {
+		sb.WriteString("├── ")
+	}
+
+	return sb.String()
+}
+
 // fuzzyMatch checks if the query is a subsequence of the target.
 func fuzzyMatch(target, query string) bool {
 	matched, _ := fuzzyMatchWithIndices(target, query)

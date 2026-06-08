@@ -124,6 +124,48 @@ func TestTreeFlatteningAndNavigation(t *testing.T) {
 		t.Errorf("expected 5 visible nodes, got %d", len(visible))
 	}
 
+	// Verify TreeConnector characters
+	// Find nodeB and nodeA2
+	var nodeB *Node
+	for _, child := range root.Children {
+		if child.Name == "dirB" {
+			nodeB = child
+			break
+		}
+	}
+	var nodeA2 *Node
+	for _, child := range nodeA.Children {
+		if child.Name == "dirA2" {
+			nodeA2 = child
+			break
+		}
+	}
+
+	if nodeB == nil || nodeA2 == nil {
+		t.Fatal("dirB or dirA2 not found in children")
+	}
+
+	if nodeA.IsLastChild() {
+		t.Errorf("expected dirA to not be the last child")
+	}
+	if nodeA.TreeConnector(root) != "├── " {
+		t.Errorf("expected dirA connector to be '├── ', got %q", nodeA.TreeConnector(root))
+	}
+
+	if !nodeB.IsLastChild() {
+		t.Errorf("expected dirB to be the last child")
+	}
+	if nodeB.TreeConnector(root) != "└── " {
+		t.Errorf("expected dirB connector to be '└── ', got %q", nodeB.TreeConnector(root))
+	}
+
+	if !nodeA2.IsLastChild() {
+		t.Errorf("expected dirA2 to be the last child of dirA")
+	}
+	if nodeA2.TreeConnector(root) != "│   └── " {
+		t.Errorf("expected dirA2 connector to be '│   └── ', got %q", nodeA2.TreeConnector(root))
+	}
+
 	// Test sibling jumps on Model
 	// Let's build a mock model
 	m := &Model{

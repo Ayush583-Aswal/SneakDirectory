@@ -7,10 +7,11 @@
 ## Core Capabilities
 
 * **Pipeline-Compatible Output Routing:** The interactive UI renders exclusively on `stderr`, leaving `stdout` clean to output the picked path. This allows immediate consumption by downstream command substitutions like `cd $(sneak)`.
-* **Tree-Semantic Navigation:** Lazily traverses filesystem structures using standard Vim motion controls, keeping disk access overhead at O(1) until directories are expanded.
+* **Tree-Semantic Navigation:** Lazily traverses filesystem structures using standard Vim motion controls, drawing structured ASCII lines and branch connectors (`├──`, `└──`, and `│`) in normal mode to map folder nesting.
 * **Non-recursive Sibling Jumps:** Capitalized `H`/`L` keys skip deeply nested folder hierarchies entirely, jumping directly to preceding or succeeding siblings.
-* **Elaborated Tree Fuzzy Filtering:** Pressing `/` triggers a fuzzy match across all currently expanded/visible directories in the tree structure. Matching characters within the name are highlighted inline using distinct, fzf-style coloration.
-* **Starship Prompt Compatibility:** Inherits Nerd Font directory iconography and dynamic Git branch tracking (`on  <branch>`) that matches the layout of modern Starship shell prompts.
+* **FZF-Style Fuzzy Finder:** Pressing `/` switches the UI into a flat list finder displaying relative paths matching the query. Character matches are highlighted inline with distinctive coloration.
+* **Starship Prompt Compatibility:** Inherits Nerd Font directory iconography and dynamic Git branch tracking (`on  <branch>`) matching the layout of modern Starship shell prompts.
+* **Process Substitution Echo:** Walks up the parent process tree on confirmation to resolve the invoking shell pipeline (e.g. `cp file.txt $(sneak)`) and prints the reconstructed command directly to `stderr`.
 * **Zoxide Hub Integration:** Tapping `z` opens a hot-path query list loaded directly from `zoxide query -l`.
 
 ---

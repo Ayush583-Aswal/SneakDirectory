@@ -198,7 +198,14 @@ func (m *Model) updateVisibleNodes() {
 	if m.SearchActive && m.SearchQuery != "" {
 		var filtered []*Node
 		for _, node := range allElaborated {
-			if matched, _ := fuzzyMatchWithIndices(node.Name, m.SearchQuery); matched {
+			relPath, err := filepath.Rel(m.Root.Path, node.Path)
+			if err != nil {
+				relPath = node.Path
+			}
+			if relPath == "." {
+				relPath = "~ (current)"
+			}
+			if matched, _ := fuzzyMatchWithIndices(relPath, m.SearchQuery); matched {
 				filtered = append(filtered, node)
 			}
 		}
@@ -475,23 +482,39 @@ func (m *Model) renderTree(maxLines int) string {
 
 	for i := start; i < end; i++ {
 		node := m.VisibleNodes[i]
-		depth := node.Depth(m.Root)
-		indent := strings.Repeat("  ", depth)
 
-		prefix := "  "
-		if node.Expanded {
-			prefix = "  "
+		var displayText string
+		var prefix string
+
+		if m.SearchActive && m.SearchQuery != "" {
+			// 1. Filtered Mode: Show list with relative paths
+			relPath, err := filepath.Rel(m.Root.Path, node.Path)
+			if err != nil {
+				relPath = node.Path
+			}
+			if relPath == "." {
+				relPath = "~ (current)"
+			}
+			displayText = relPath
+			prefix = " " // simple folder icon prefix for list view
+		} else {
+			// 2. Normal Mode: Show tree with lines and guides
+			connector := node.TreeConnector(m.Root)
+			prefixIcon := "  "
+			if node.Expanded {
+				prefixIcon = "  "
+			}
+			if node == m.Root {
+				prefixIcon = " "
+			}
+			displayText = prefixIcon + node.Name
+			prefix = connector
 		}
 
-		nodeName := node.Name
-		if node == m.Root {
-			nodeName = " ~ " + filepath.Base(node.Path)
-			prefix = " "
-		}
-
+		// Calculate fuzzy match indices for fzf-like highlighting
 		var matchIndices []int
 		if m.SearchActive && m.SearchQuery != "" {
-			_, matchIndices = fuzzyMatchWithIndices(nodeName, m.SearchQuery)
+			_, matchIndices = fuzzyMatchWithIndices(displayText, m.SearchQuery)
 		}
 
 		var baseStyle lipgloss.Style
@@ -509,17 +532,26 @@ func (m *Model) renderTree(maxLines int) string {
 			} else {
 				highlightStyle = Renderer.NewStyle().Foreground(FzfMatchColor).Bold(true)
 			}
-			highlightedName = highlightText(nodeName, matchIndices, baseStyle, highlightStyle)
+			highlightedName = highlightText(displayText, matchIndices, baseStyle, highlightStyle)
 		} else {
-			highlightedName = baseStyle.Render(nodeName)
+			highlightedName = baseStyle.Render(displayText)
 		}
 
 		var lineText string
 		indentStyle := Renderer.NewStyle().Foreground(SubtleColor)
 		if i == m.Cursor {
-			lineText = indentStyle.Render("❯ "+indent) + baseStyle.Render(prefix) + highlightedName
+			if m.SearchActive && m.SearchQuery != "" {
+				lineText = indentStyle.Render("❯ ") + baseStyle.Render(prefix) + highlightedName
+			} else {
+				// prefix contains tree guides like "├── " or "│   └── "
+				lineText = indentStyle.Render("❯ ") + indentStyle.Render(prefix) + highlightedName
+			}
 		} else {
-			lineText = indentStyle.Render("  "+indent) + baseStyle.Render(prefix) + highlightedName
+			if m.SearchActive && m.SearchQuery != "" {
+				lineText = indentStyle.Render("  ") + baseStyle.Render(prefix) + highlightedName
+			} else {
+				lineText = indentStyle.Render("  ") + indentStyle.Render(prefix) + highlightedName
+			}
 		}
 
 		lines = append(lines, lineText)
